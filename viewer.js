@@ -2281,7 +2281,7 @@ function assertLocalReferences(documentModel, resourceBase) {
             const baseUrl = new URL(resourceBase);
             const resourceUrl = new URL(uri, baseUrl);
             if (resourceUrl.protocol !== "file:") {
-                throw new Error("Удалённые ресурсы glTF запрещены в локальном просмотрщике.");
+                throw new Error("Удалённые ресурсы glTF запрещены в просмотрщике.");
             }
             const decodedPath = decodeURIComponent(resourceUrl.pathname);
             if (decodedPath.split("/").some(segment => segment === "." || segment === "..")) {
@@ -10416,7 +10416,7 @@ async function loadModel(descriptor) {
     clearModel();
     sendToHost({ type: "viewerStatus", stage: "loadStarted", requestId: descriptor.requestId || null });
     const currentToken = state.loadToken;
-    setLoading("Проверка локальной модели...");
+    setLoading("Проверка модели...");
     setStatus(`Загрузка модели ${descriptor.name}...`);
     const started = performance.now();
     try {
@@ -11190,10 +11190,10 @@ if (helpToggleElement && helpPanelElement) {
         handleHostMessage(event.data).catch(error => reportError(userErrorMessage(error, "Ошибка обработки сообщения приложения")));
     });
     window.addEventListener("error", event => {
-        reportError(`Ошибка локального просмотрщика: ${event.message || "Неизвестная ошибка."}`);
+        reportError(`Ошибка просмотрщика: ${event.message || "Неизвестная ошибка."}`);
     });
     window.addEventListener("unhandledrejection", event => {
-        reportError(userErrorMessage(event.reason, "Ошибка локального просмотрщика"));
+        reportError(userErrorMessage(event.reason, "Ошибка просмотрщика"));
     });
 }
 
@@ -11222,7 +11222,7 @@ async function initialize() {
         clearModel();
         state.ready = true;
         hideLoading();
-        setStatus("Локальный просмотрщик готов. Сетевые ресурсы не используются.");
+        setStatus("Просмотрщик готов.");
         startRenderLoop();
         window.modelViewerApi = {
             resetCamera,
@@ -11335,7 +11335,7 @@ async function initialize() {
                         };
         sendToHost({ type: "viewerReady", threeRevision: state.THREE.REVISION });
     } catch (error) {
-        reportError(userErrorMessage(error, "Ошибка инициализации локального просмотрщика"));
+        reportError(userErrorMessage(error, "Ошибка запуска просмотрщика"));
     }
 }
 
