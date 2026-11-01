@@ -11138,12 +11138,47 @@ if (helpToggleElement && helpPanelElement) {
         }
     });
     state.renderer.domElement.addEventListener("dblclick", event => {
+        if (Date.now() - lastTouchDoubleTapHandled < 600) {
+            // Двойное касание уже обработано touch-обработчиком ниже.
+            return;
+        }
         if (event.button !== 0) {
             return;
         }
         event.preventDefault();
         closeTreeContextMenu();
         const picked = getViewportDoubleClickTarget(event.clientX, event.clientY);
+        if (!picked) {
+            return;
+        }
+        selectObject(picked);
+        toggleAnimatedObject(picked);
+    });
+    // Двойное касание на телефонах: часть мобильных браузеров не присылает
+    // dblclick по touch-событиям, поэтому пара быстрых тапов ловится вручную
+    // и запускает ту же анимацию.
+    let lastTapTime = 0;
+    let lastTapX = 0;
+    let lastTapY = 0;
+    let lastTouchDoubleTapHandled = 0;
+    state.renderer.domElement.addEventListener("touchend", event => {
+        const touch = event.changedTouches && event.changedTouches[0];
+        if (!touch) {
+            return;
+        }
+        const now = Date.now();
+        const moved = Math.hypot(touch.clientX - lastTapX, touch.clientY - lastTapY);
+        const isDoubleTap = now - lastTapTime < 400 && moved < 30;
+        lastTapTime = now;
+        lastTapX = touch.clientX;
+        lastTapY = touch.clientY;
+        if (!isDoubleTap) {
+            return;
+        }
+        lastTouchDoubleTapHandled = now;
+        event.preventDefault();
+        closeTreeContextMenu();
+        const picked = getViewportDoubleClickTarget(touch.clientX, touch.clientY);
         if (!picked) {
             return;
         }
