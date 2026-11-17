@@ -10,6 +10,7 @@ const elements = {
     zoomIn: document.getElementById("zoom-in"),
     zoomOut: document.getElementById("zoom-out"),
     dimensionsToggle: document.getElementById("dimensions-toggle"),
+    markupToggle: document.getElementById("markup-toggle"),
     backgroundColor: document.getElementById("background-color"),
     backgroundSwatchFill: document.getElementById("background-swatch-fill"),
     statusBar: document.querySelector(".status-bar")
@@ -63,6 +64,8 @@ const DIMENSION_ARROW_FRACTION = 0.25;
 const DIMENSION_ARROW_MAX_LENGTH = 0.025;
 const DIMENSIONS_LAYER_ID = "dimensions-layer";
 const DIMENSION_LABEL_CLASS = "dim-label";
+// Разметка проекта: отрезки и контуры без цвета Базиса рисуются нейтральным.
+const MARKUP_DEFAULT_COLOR = 0x55677a;
 
 const state = {
     THREE: null,
@@ -92,6 +95,9 @@ const state = {
     dimensionLabels: [],
     dimensionsLayer: null,
     dimensionsVisible: false,
+    markupGroup: null,
+    markupRecords: [],
+    markupVisible: false,
     partObjects: new Map(),
     selectionHelper: null,
     selectionOutlines: new Map(),
@@ -543,7 +549,7 @@ function isSelectionOutline(object) {
 function isWireframeExcludedObject(object) {
     const userData = object && object.userData && typeof object.userData === "object" ? object.userData : null;
     return object === state.markerGroup || object === state.selectionHelper || isSelectionOutline(object) ||
-        object === state.dimensionsGroup ||
+        object === state.dimensionsGroup || object === state.markupGroup ||
         Boolean(userData && (userData.viewerHelper === true || userData.isHelper === true || userData.markerType));
 }
 
@@ -2374,6 +2380,7 @@ function clearModel() {
     removeSelectionOutlines();
     disposeSelectionOutlineCache();
     clearDimensionVisuals();
+    clearMarkupVisuals();
     state.selectedObject = null;
     state.selectedBlock = null;
     state.selectedObjects = [];
@@ -4164,6 +4171,134 @@ function updateDimensionLabels() {
         const x = (projected.x * 0.5 + 0.5) * width;
         const y = (-projected.y * 0.5 + 0.5) * height;
         item.element.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -50%)`;
+    }
+}
+
+function collectMarkupRecords(root) {
+    const records = [];
+    const seenIds = new Set();
+    if (!root) {
+        return records;
+    }
+    root.traverse(object => {
+        if (!object.userData || typeof object.userData !== "object") {
+            return;
+        }
+        const extras = object.userData.extras && typeof object.userData.extras === "object" ? object.userData.extras : object.userData;
+        const kinds = [["lines", "line"], ["contours", "contour"]];
+        for (const [markerKey, kind] of kinds) {
+            const entries = Array.isArray(extras[markerKey]) ? extras[markerKey] : [];
+            for (const entry of entries) {
+                if (!entry || typeof entry !== "object") {
+                    continue;
+                }
+                const id = typeof entry.id === "string" && entry.id ? entry.id : `${kind}_${records.length}`;
+                if (seenIds.has(id)) {
+                    continue;
+                }
+                seenIds.add(id);
+                records.push({ kind, entry });
+            }
+        }
+    });
+    return records;
+}
+
+function markupSegmentPoints(entry, edgesField) {
+    const points = [];
+    const pairs = Array.isArray(entry[edgesField]) ? entry[edgesField] : [];
+    for (const pair of pairs) {
+        if (!Array.isArray(pair) || pair.length !== 2) {
+            continue;
+        }
+        const start = toDimensionVector(pair[0]);
+        const end = toDimensionVector(pair[1]);
+        if (!start || !end) {
+            continue;
+        }
+        points.push(start, end);
+    }
+    return points;
+}
+
+function markupRecordColor(entry) {
+    const color = Array.isArray(entry.color) && entry.color.length === 3 ? entry.color : null;
+    if (!color || !color.every(value => Number.isFinite(Number(value)) && Number(value) >= 0 && Number(value) <= 255)) {
+        return state.THREE.Color(MARKUP_DEFAULT_COLOR);
+    }
+    return new state.THREE.Color(Number(color[0]) / 255, Number(color[1]) / 255, Number(color[2]) / 255);
+}
+
+// Разметка проекта: отрезки TLine3D и контуры TContour3D в цвете Базиса.
+function buildMarkupVisuals(root) {
+    const records = collectMarkupRecords(root);
+    state.markupRecords = records;
+    if (!records.length) {
+        if (elements.markupToggle) {
+            elements.markupToggle.hidden = true;
+        }
+        return;
+    }
+    const THREE = state.THREE;
+    const group = new THREE.Group();
+    group.name = "ModelMarkup";
+    for (const record of records) {
+        const edgesField = record.kind === "line" ? "edges" : "segments";
+        const points = markupSegmentPoints(record.entry, edgesField);
+        if (!points.length) {
+            continue;
+        }
+        const vertices = [];
+        for (const point of points) {
+            vertices.push(point.x, point.y, point.z);
+        }
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+        const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: markupRecordColor(record.entry), transparent: true, opacity: 0.95, depthTest: true }));
+        lines.renderOrder = 8;
+        lines.raycast = () => {};
+        group.add(lines);
+    }
+    group.visible = false;
+    state.markupGroup = group;
+    state.scene.add(group);
+    if (elements.markupToggle) {
+        elements.markupToggle.hidden = false;
+    }
+    applyMarkupVisibility();
+}
+
+function applyMarkupVisibility() {
+    if (state.markupGroup) {
+        state.markupGroup.visible = state.markupVisible;
+    }
+    if (elements.markupToggle) {
+        elements.markupToggle.setAttribute("aria-pressed", state.markupVisible ? "true" : "false");
+        elements.markupToggle.title = state.markupVisible ? "Скрыть разметку" : "Показать разметку";
+    }
+}
+
+function toggleMarkup() {
+    if (!state.markupRecords.length) {
+        return;
+    }
+    state.markupVisible = !state.markupVisible;
+    applyMarkupVisibility();
+    setStatus(state.markupVisible ? `Разметка показана: ${state.markupRecords.length}.` : "Разметка скрыта.");
+}
+
+function clearMarkupVisuals() {
+    if (state.markupGroup) {
+        state.scene.remove(state.markupGroup);
+        disposeObject(state.markupGroup);
+        state.markupGroup = null;
+    }
+    state.markupRecords.length = 0;
+    state.markupVisible = false;
+    if (elements.markupToggle) {
+        elements.markupToggle.hidden = true;
+        elements.markupToggle.setAttribute("aria-pressed", "false");
+        elements.markupToggle.title = "Показать разметку";
     }
 }
 
@@ -10649,6 +10784,7 @@ function populateModelView(gltf, root, packageMetadata, documentModel) {
     buildObjectTree(root, packageMetadata);
     const markerSummary = collectMarkerData(gltf, root, packageMetadata);
     buildDimensionVisuals(root);
+    buildMarkupVisuals(root);
     elements.viewportHint.style.display = "none";
     state.pickTargets = [];
     refreshPickTargets();
@@ -10711,7 +10847,8 @@ async function loadModel(descriptor) {
         const counts = getAnimationCounts();
         const markerDiagnostics = getMarkerDiagnostics();
         const dimensionSuffix = state.dimensionRecords.length ? ` Размеров: ${state.dimensionRecords.length}.` : "";
-        setStatus(`Модель ${descriptor.name} загружена. Отверстий: ${details.markerSummary.holes}, крепежа и фурнитуры: ${details.markerSummary.fasteners}. Анимаций glTF: ${state.clips.length}.${dimensionSuffix}`);
+        const markupSuffix = state.markupRecords.length ? ` Разметки: ${state.markupRecords.length}.` : "";
+        setStatus(`Модель ${descriptor.name} загружена. Отверстий: ${details.markerSummary.holes}, крепежа и фурнитуры: ${details.markerSummary.fasteners}. Анимаций glTF: ${state.clips.length}.${dimensionSuffix}${markupSuffix}`);
         await reportRenderDiagnostics(descriptor.requestId || null, markerDiagnostics);
         sendToHost({
             type: "modelLoaded",
@@ -10725,6 +10862,7 @@ async function loadModel(descriptor) {
              holeCount: details.markerSummary.holes,
              fastenerCount: details.markerSummary.fasteners,
              dimensionCount: state.dimensionRecords.length,
+             markupCount: state.markupRecords.length,
              fastenerMarkerCount: details.markerSummary.fastenerMarkers,
              fastenerGeometryParts: details.markerSummary.fastenerGeometry,
              fastenerSynthesizedParts: details.markerSummary.fastenerSynthesized,
@@ -11319,6 +11457,11 @@ function bindEvents() {
     if (elements.dimensionsToggle) {
         elements.dimensionsToggle.addEventListener("click", () => {
             toggleDimensions();
+        });
+    }
+    if (elements.markupToggle) {
+        elements.markupToggle.addEventListener("click", () => {
+            toggleMarkup();
         });
     }
     if (elements.zoomIn) {
