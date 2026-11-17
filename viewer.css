@@ -223,6 +223,11 @@ buttonbuttonbuttonbuttonbuttonbuttonbuttonbutton.object-button {
     color: var(--text-on-accent);
 }
 
+/* Скрытая кнопка размеров: display из .toolbar-button перекрывает hidden. */
+.toolbar-button[hidden] {
+    display: none;
+}
+
 .toolbar-icon {
     display: block;
     width: 18px;
@@ -377,6 +382,32 @@ buttonbuttonbuttonbuttonbuttonbuttonbuttonbutton.object-button {
     left: 16px;
     color: var(--text-muted);
     font-size: 10px;
+}
+
+/* Слой подписей размеров поверх канвы: щелчки проходят к сцене. */
+#dimensions-layer {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 5;
+}
+
+.dim-label {
+    position: absolute;
+    top: 0;
+    left: 0;
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--floating);
+    color: var(--accent-strong);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.4;
+    white-space: nowrap;
+    box-shadow: 0 1px 4px rgba(16, 32, 46, 0.18);
+    will-change: transform;
 }
 
 .button {

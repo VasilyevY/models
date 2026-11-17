@@ -9,6 +9,7 @@ const elements = {
     displayModeButtons: Array.from(document.querySelectorAll("[data-display-mode]")),
     zoomIn: document.getElementById("zoom-in"),
     zoomOut: document.getElementById("zoom-out"),
+    dimensionsToggle: document.getElementById("dimensions-toggle"),
     backgroundColor: document.getElementById("background-color"),
     backgroundSwatchFill: document.getElementById("background-swatch-fill"),
     statusBar: document.querySelector(".status-bar")
@@ -56,6 +57,12 @@ const DISPLAY_MODES = [
 const DISPLAY_MODE_DEFAULT = "facets";
 const DISPLAY_MODE_TRANSPARENT = "transparent";
 const DISPLAY_MODE_IDS = DISPLAY_MODES.map(mode => mode.id);
+// Размеры Базиса: линия цвета акцента, стрелка не длиннее четверти размера.
+const DIMENSION_LINE_COLOR = 0x2f6ea8;
+const DIMENSION_ARROW_FRACTION = 0.25;
+const DIMENSION_ARROW_MAX_LENGTH = 0.025;
+const DIMENSIONS_LAYER_ID = "dimensions-layer";
+const DIMENSION_LABEL_CLASS = "dim-label";
 
 const state = {
     THREE: null,
@@ -80,6 +87,11 @@ const state = {
     fastenerTiltedAxisRecords: 0,
     fastenerAxisVectorErrors: 0,
     lastStrayMarkerCount: null,
+    dimensionsGroup: null,
+    dimensionRecords: [],
+    dimensionLabels: [],
+    dimensionsLayer: null,
+    dimensionsVisible: false,
     partObjects: new Map(),
     selectionHelper: null,
     selectionOutlines: new Map(),
@@ -531,6 +543,7 @@ function isSelectionOutline(object) {
 function isWireframeExcludedObject(object) {
     const userData = object && object.userData && typeof object.userData === "object" ? object.userData : null;
     return object === state.markerGroup || object === state.selectionHelper || isSelectionOutline(object) ||
+        object === state.dimensionsGroup ||
         Boolean(userData && (userData.viewerHelper === true || userData.isHelper === true || userData.markerType));
 }
 
@@ -2219,6 +2232,7 @@ function startRenderLoop() {
             state.scene.updateMatrixWorld(true);
             updateTransparentRenderOrder();
         }
+        updateDimensionLabels();
         state.renderer.render(state.scene, state.camera);
         state.renderedFrameCount += 1;
     };
@@ -2359,6 +2373,7 @@ function clearModel() {
     removeWireframeOverlays();
     removeSelectionOutlines();
     disposeSelectionOutlineCache();
+    clearDimensionVisuals();
     state.selectedObject = null;
     state.selectedBlock = null;
     state.selectedObjects = [];
@@ -3907,6 +3922,249 @@ function collectMarkerData(gltf, root, packageMetadata) {
         state.scene.updateMatrixWorld(true);
     }
     return summary;
+}
+
+function toDimensionVector(value) {
+    if (Array.isArray(value) && value.length === 3) {
+        const vector = value.map(Number);
+        if (!vector.every(Number.isFinite)) {
+            return null;
+        }
+        return new state.THREE.Vector3(vector[0], vector[1], vector[2]);
+    }
+    if (value && typeof value === "object") {
+        const vector = [Number(value.x), Number(value.y), Number(value.z)];
+        if (!vector.every(Number.isFinite)) {
+            return null;
+        }
+        return new state.THREE.Vector3(vector[0], vector[1], vector[2]);
+    }
+    return null;
+}
+
+function ensureDimensionsLayer() {
+    if (state.dimensionsLayer) {
+        return state.dimensionsLayer;
+    }
+    const layer = document.createElement("div");
+    layer.id = DIMENSIONS_LAYER_ID;
+    layer.hidden = true;
+    elements.viewport.appendChild(layer);
+    state.dimensionsLayer = layer;
+    return layer;
+}
+
+function removeDimensionsLayer() {
+    if (!state.dimensionsLayer) {
+        return;
+    }
+    state.dimensionsLayer.remove();
+    state.dimensionsLayer = null;
+}
+
+function clearDimensionVisuals() {
+    if (state.dimensionsGroup) {
+        state.scene.remove(state.dimensionsGroup);
+        disposeObject(state.dimensionsGroup);
+        state.dimensionsGroup = null;
+    }
+    state.dimensionRecords.length = 0;
+    state.dimensionLabels.length = 0;
+    removeDimensionsLayer();
+    state.dimensionsVisible = false;
+    if (elements.dimensionsToggle) {
+        elements.dimensionsToggle.hidden = true;
+        elements.dimensionsToggle.setAttribute("aria-pressed", "false");
+        elements.dimensionsToggle.title = "Показать размеры";
+    }
+}
+
+function collectDimensionRecords(root) {
+    const records = [];
+    const seenIds = new Set();
+    if (!root) {
+        return records;
+    }
+    root.traverse(object => {
+        if (!object.userData || typeof object.userData !== "object") {
+            return;
+        }
+        const extras = object.userData.extras && typeof object.userData.extras === "object" ? object.userData.extras : object.userData;
+        const entries = Array.isArray(extras.dimensions) ? extras.dimensions : [];
+        for (const entry of entries) {
+            if (!entry || typeof entry !== "object") {
+                continue;
+            }
+            const id = typeof entry.id === "string" && entry.id ? entry.id : `dim_${records.length}`;
+            if (seenIds.has(id)) {
+                continue;
+            }
+            seenIds.add(id);
+            records.push(entry);
+        }
+    });
+    return records;
+}
+
+function formatDimensionValue(record, edgeLength) {
+    const value = Number(record.value);
+    if (Number.isFinite(value) && value > 0) {
+        return `${Math.round(value)} мм`;
+    }
+    return `${Math.round(edgeLength * 1000)} мм`;
+}
+
+function dimensionPerpendicular(direction) {
+    const normalized = direction.clone().normalize();
+    const helper = Math.abs(normalized.y) < 0.9 ? new state.THREE.Vector3(0, 1, 0) : new state.THREE.Vector3(1, 0, 0);
+    return new state.THREE.Vector3().crossVectors(normalized, helper).normalize();
+}
+
+function buildDimensionVisuals(root) {
+    const records = collectDimensionRecords(root);
+    state.dimensionRecords = records;
+    if (!records.length) {
+        if (elements.dimensionsToggle) {
+            elements.dimensionsToggle.hidden = true;
+        }
+        return;
+    }
+    const THREE = state.THREE;
+    const group = new THREE.Group();
+    group.name = "ModelDimensions";
+    const layer = ensureDimensionsLayer();
+    layer.innerHTML = "";
+    state.dimensionLabels.length = 0;
+    const lineMaterial = new THREE.LineBasicMaterial({ color: DIMENSION_LINE_COLOR, transparent: true, opacity: 0.9, depthTest: true });
+    for (const record of records) {
+        const edges = Array.isArray(record.edges) ? record.edges : [];
+        const measuredEdges = [];
+        let longest = null;
+        let longestLength = 0;
+        for (const edge of edges) {
+            const start = toDimensionVector(edge && edge[0]);
+            const end = toDimensionVector(edge && edge[1]);
+            if (!start || !end) {
+                continue;
+            }
+            const length = start.distanceTo(end);
+            if (length <= 1e-6) {
+                continue;
+            }
+            const measured = { start, end };
+            measuredEdges.push(measured);
+            if (length > longestLength) {
+                longestLength = length;
+                longest = measured;
+            }
+        }
+        if (!measuredEdges.length) {
+            continue;
+        }
+        const vertices = [];
+        for (const { start, end } of measuredEdges) {
+            vertices.push(start.x, start.y, start.z, end.x, end.y, end.z);
+        }
+        const direction = longest.end.clone().sub(longest.start);
+        const arrowLength = Math.min(DIMENSION_ARROW_MAX_LENGTH, longestLength * DIMENSION_ARROW_FRACTION);
+        if (arrowLength > 1e-6) {
+            const step = direction.clone().normalize().multiplyScalar(arrowLength);
+            const wing = dimensionPerpendicular(direction).multiplyScalar(arrowLength * 0.35);
+            for (const [point, sign] of [[longest.start, 1], [longest.end, -1]]) {
+                const tip = point.clone().addScaledVector(step, sign);
+                vertices.push(
+                    point.x, point.y, point.z,
+                    tip.x + wing.x, tip.y + wing.y, tip.z + wing.z,
+                    point.x, point.y, point.z,
+                    tip.x - wing.x, tip.y - wing.y, tip.z - wing.z
+                );
+            }
+        }
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+        const lines = new THREE.LineSegments(geometry, lineMaterial.clone());
+        lines.renderOrder = 9;
+        lines.raycast = () => {};
+        group.add(lines);
+        const label = document.createElement("div");
+        label.className = DIMENSION_LABEL_CLASS;
+        label.textContent = formatDimensionValue(record, longestLength);
+        layer.appendChild(label);
+        state.dimensionLabels.push({ element: label, position: longest.start.clone().add(longest.end).multiplyScalar(0.5) });
+    }
+    group.visible = false;
+    state.dimensionsGroup = group;
+    state.scene.add(group);
+    if (elements.dimensionsToggle) {
+        elements.dimensionsToggle.hidden = false;
+    }
+    applyDimensionsVisibility();
+}
+
+function applyDimensionsVisibility() {
+    if (state.dimensionsGroup) {
+        state.dimensionsGroup.visible = state.dimensionsVisible;
+    }
+    if (state.dimensionsLayer) {
+        state.dimensionsLayer.hidden = !state.dimensionsVisible;
+    }
+    if (elements.dimensionsToggle) {
+        elements.dimensionsToggle.setAttribute("aria-pressed", state.dimensionsVisible ? "true" : "false");
+        elements.dimensionsToggle.title = state.dimensionsVisible ? "Скрыть размеры" : "Показать размеры";
+    }
+}
+
+function toggleDimensions() {
+    if (!state.dimensionRecords.length) {
+        return;
+    }
+    state.dimensionsVisible = !state.dimensionsVisible;
+    applyDimensionsVisibility();
+    setStatus(state.dimensionsVisible ? `Размеры показаны: ${state.dimensionRecords.length}.` : "Размеры скрыты.");
+}
+
+// Подписи размеров проецируются в экранные координаты каждый кадр;
+// метка прячется, если её точку перекрывает геометрия модели.
+function updateDimensionLabels() {
+    if (!state.dimensionsVisible || !state.dimensionsLayer || !state.dimensionLabels.length) {
+        return;
+    }
+    if (!state.camera || !state.scene || !elements.viewport) {
+        return;
+    }
+    state.scene.updateMatrixWorld(true);
+    const width = elements.viewport.clientWidth;
+    const height = elements.viewport.clientHeight;
+    const cameraPosition = state.camera.position;
+    for (const item of state.dimensionLabels) {
+        const projected = item.position.clone().project(state.camera);
+        if (projected.z < -1 || projected.z > 1) {
+            item.element.style.display = "none";
+            continue;
+        }
+        let occluded = false;
+        if (state.raycaster && state.modelRoot) {
+            const direction = item.position.clone().sub(cameraPosition);
+            const distance = direction.length();
+            if (distance > 1e-6) {
+                direction.normalize();
+                state.raycaster.set(cameraPosition, direction);
+                state.raycaster.far = distance - 0.001;
+                // Перекрытие считают только меши: у линий порог raycast
+                // по умолчанию в метры, и каркас панели ловится всегда.
+                occluded = state.raycaster.intersectObject(state.modelRoot, true).some(hit => hit.object && hit.object.isMesh);
+                state.raycaster.far = Infinity;
+            }
+        }
+        if (occluded) {
+            item.element.style.display = "none";
+            continue;
+        }
+        item.element.style.display = "";
+        const x = (projected.x * 0.5 + 0.5) * width;
+        const y = (-projected.y * 0.5 + 0.5) * height;
+        item.element.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -50%)`;
+    }
 }
 
 function getAnimationRootObjects() {
@@ -10390,6 +10648,7 @@ function populateModelView(gltf, root, packageMetadata, documentModel) {
     buildPartObjectMap(root);
     buildObjectTree(root, packageMetadata);
     const markerSummary = collectMarkerData(gltf, root, packageMetadata);
+    buildDimensionVisuals(root);
     elements.viewportHint.style.display = "none";
     state.pickTargets = [];
     refreshPickTargets();
@@ -10451,7 +10710,8 @@ async function loadModel(descriptor) {
         const loadDurationMs = performance.now() - started;
         const counts = getAnimationCounts();
         const markerDiagnostics = getMarkerDiagnostics();
-        setStatus(`Модель ${descriptor.name} загружена. Отверстий: ${details.markerSummary.holes}, крепежа и фурнитуры: ${details.markerSummary.fasteners}. Анимаций glTF: ${state.clips.length}.`);
+        const dimensionSuffix = state.dimensionRecords.length ? ` Размеров: ${state.dimensionRecords.length}.` : "";
+        setStatus(`Модель ${descriptor.name} загружена. Отверстий: ${details.markerSummary.holes}, крепежа и фурнитуры: ${details.markerSummary.fasteners}. Анимаций glTF: ${state.clips.length}.${dimensionSuffix}`);
         await reportRenderDiagnostics(descriptor.requestId || null, markerDiagnostics);
         sendToHost({
             type: "modelLoaded",
@@ -10464,6 +10724,7 @@ async function loadModel(descriptor) {
              objectCount: details.objectCount,
              holeCount: details.markerSummary.holes,
              fastenerCount: details.markerSummary.fasteners,
+             dimensionCount: state.dimensionRecords.length,
              fastenerMarkerCount: details.markerSummary.fastenerMarkers,
              fastenerGeometryParts: details.markerSummary.fastenerGeometry,
              fastenerSynthesizedParts: details.markerSummary.fastenerSynthesized,
@@ -11053,6 +11314,11 @@ function bindEvents() {
     for (const button of elements.displayModeButtons) {
         button.addEventListener("click", () => {
             applyDisplayMode(button.dataset.displayMode);
+        });
+    }
+    if (elements.dimensionsToggle) {
+        elements.dimensionsToggle.addEventListener("click", () => {
+            toggleDimensions();
         });
     }
     if (elements.zoomIn) {
