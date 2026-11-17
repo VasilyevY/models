@@ -8,7 +8,7 @@
     <meta name="description" content="Интерактивный 3D-просмотр модели">
     <meta property="og:title" content="Просмотр проекта">
     <meta property="og:description" content="Интерактивный 3D-просмотр модели">
-    <link rel="stylesheet" href="./viewer.css?v=1794937536">
+    <link rel="stylesheet" href="./viewer.css?v=1794938678">
     <script type="importmap">
         {
             "imports": {
@@ -126,6 +126,9 @@
                         <div class="loading-card">
                             <span class="loading-indicator"></span>
                             <span id="loading-message">Загрузка модели…</span>
+                            <div id="loading-progress" class="loading-progress" hidden>
+                                <div id="loading-progress-fill" class="loading-progress-fill"></div>
+                            </div>
                         </div>
                     </div>
                     <div id="viewport-hint" class="viewport-hint">Откройте файл GLB или glTF</div>
@@ -138,7 +141,7 @@
             <span id="status-text">Запуск просмотрщика...</span>
         </footer>
     </div>
-    <script type="module" src="./viewer.js?v=1794937536"></script>
-    <script type="module" src="./autoload.js?v=1794937536"></script>
+    <script type="module" src="./viewer.js?v=1794938678"></script>
+    <script type="module" src="./autoload.js?v=1794938678"></script>
 </body>
 </html>

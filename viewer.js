@@ -2,6 +2,8 @@ const elements = {
     viewport: document.getElementById("viewport"),
     loadingOverlay: document.getElementById("loading-overlay"),
     loadingMessage: document.getElementById("loading-message"),
+    loadingProgress: document.getElementById("loading-progress"),
+    loadingProgressFill: document.getElementById("loading-progress-fill"),
     statusText: document.getElementById("status-text"),
     workspace: document.querySelector(".workspace"),
     viewportHint: document.getElementById("viewport-hint"),
@@ -10887,6 +10889,77 @@ async function loadModel(descriptor) {
     }
 }
 
+function formatLoadedMegabytes(loaded) {
+    const megabytes = loaded / (1024 * 1024);
+    return megabytes >= 10 ? megabytes.toFixed(0) : megabytes.toFixed(1);
+}
+
+// Проценты скачивания модели по сети: число в карточке загрузки и полоса.
+function updateLoadingProgress(loaded, total) {
+    if (!elements.loadingProgress || !elements.loadingProgressFill) {
+        return;
+    }
+    elements.loadingProgress.hidden = false;
+    if (total > 0) {
+        const percent = Math.min(100, Math.round((loaded / total) * 100));
+        elements.loadingProgressFill.style.width = percent + "%";
+        setLoading(`Загрузка модели… ${percent}%`);
+    } else {
+        setLoading(`Загрузка модели… ${formatLoadedMegabytes(loaded)} МБ`);
+    }
+}
+
+function hideLoadingProgress() {
+    if (elements.loadingProgress) {
+        elements.loadingProgress.hidden = true;
+    }
+}
+
+// Загрузка модели по ссылке: ответ читается порциями, чтобы видеть проценты.
+async function loadModelFromUrl(url) {
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Не удалось загрузить модель: ${response.status}`);
+    }
+    const declaredTotal = Number(response.headers.get("Content-Length"));
+    const hasTotal = Number.isFinite(declaredTotal) && declaredTotal > 0;
+    const reader = response.body && typeof response.body.getReader === "function" ? response.body.getReader() : null;
+    let arrayBuffer;
+    if (reader) {
+        const chunks = [];
+        let loaded = 0;
+        for (;;) {
+            const chunk = await reader.read();
+            if (chunk.done) {
+                break;
+            }
+            chunks.push(chunk.value);
+            loaded += chunk.value.byteLength;
+            updateLoadingProgress(loaded, hasTotal ? declaredTotal : 0);
+        }
+        const bytes = new Uint8Array(loaded);
+        let offset = 0;
+        for (const chunk of chunks) {
+            bytes.set(chunk, offset);
+            offset += chunk.byteLength;
+        }
+        arrayBuffer = bytes.buffer;
+    } else {
+        arrayBuffer = await response.arrayBuffer();
+    }
+    hideLoadingProgress();
+    const slash = url.lastIndexOf("/");
+    return loadModel({
+        requestId: "url",
+        name: url.substring(slash + 1) || "model.glb",
+        path: url,
+        resourceBase: slash >= 0 ? url.substring(0, slash + 1) : "",
+        hasExternalResources: true,
+        packageMetadata: null,
+        arrayBuffer
+    });
+}
+
 function parseHostMessage(data) {
     if (typeof data === "string") {
         return JSON.parse(data);
@@ -11723,23 +11796,10 @@ async function initialize() {
                      * Загрузка модели по URL. Добавлено в копию просмотрщика для публикации:
                      * в источнике модель приходит от хоста WPF через base64-сообщение,
                      * а при раздаче по ссылке её нужно взять из сети самому.
+                     * Сама загрузка с процентами живёт в viewer.js, метод только пробрасывает.
                      */
                     loadModelFromUrl: async (url) => {
-                      const response = await fetch(url);
-                      if (!response.ok) {
-                        throw new Error(`Не удалось загрузить модель: ${response.status}`);
-                      }
-                      const arrayBuffer = await response.arrayBuffer();
-                      const slash = url.lastIndexOf("/");
-                      return loadModel({
-                        requestId: "url",
-                        name: url.substring(slash + 1) || "model.glb",
-                        path: url,
-                        resourceBase: slash >= 0 ? url.substring(0, slash + 1) : "",
-                        hasExternalResources: true,
-                        packageMetadata: null,
-                        arrayBuffer
-                      });
+                      return loadModelFromUrl(url);
                     },
                         };
         sendToHost({ type: "viewerReady", threeRevision: state.THREE.REVISION });

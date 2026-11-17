@@ -328,6 +328,24 @@ buttonbuttonbuttonbuttonbuttonbuttonbuttonbutton.object-button {
     text-align: center;
 }
 
+/* Полоса прогресса скачивания модели по ссылке. */
+.loading-progress {
+    flex: 1 1 auto;
+    min-width: 120px;
+    height: 4px;
+    overflow: hidden;
+    border-radius: 2px;
+    background: var(--panel-sunken);
+}
+
+.loading-progress-fill {
+    width: 0%;
+    height: 100%;
+    border-radius: 2px;
+    background: var(--accent);
+    transition: width 120ms ease;
+}
+
 .loading-indicator {
     width: 14px;
     height: 14px;
