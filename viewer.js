@@ -4322,19 +4322,21 @@ function getAnimationRootObjects() {
 
 function applyAnimationOpenPose(root) {
     const extras = getObjectExtras(root);
+    let applied = false;
     if (getIntegerValue(extras.type) === 1 && Array.isArray(extras.rotationQuaternion) && extras.rotationQuaternion.length === 4) {
         root.quaternion.set(extras.rotationQuaternion[0], extras.rotationQuaternion[1], extras.rotationQuaternion[2], extras.rotationQuaternion[3]);
-        return true;
+        applied = true;
     }
+    // Поворот со смещением Базиса: открытая поза включает сдвиг вдоль оси.
     if (Array.isArray(extras.pivot) && Array.isArray(extras.axisDirection) && Number.isFinite(Number(extras.doorShift))) {
         root.position.set(
             Number(extras.pivot[0]) + Number(extras.axisDirection[0]) * Number(extras.doorShift),
             Number(extras.pivot[1]) + Number(extras.axisDirection[1]) * Number(extras.doorShift),
             Number(extras.pivot[2]) + Number(extras.axisDirection[2]) * Number(extras.doorShift)
         );
-        return true;
+        applied = true;
     }
-    return false;
+    return applied;
 }
 
 function findAnimationAncestor(object) {
