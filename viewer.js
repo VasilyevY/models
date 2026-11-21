@@ -873,6 +873,7 @@ function applyDisplayMode(mode) {
         setWireframeOverlayVisibility(false);
     }
     updateWireframeLineColor();
+    applyDimensionLineDepth();
     setSelectionOutlineVisibility(true);
     if (state.selectedObjects.length > 0) {
         applySelectionEmissive(state.selectedObject, state.selectedObjects);
@@ -4015,6 +4016,21 @@ function collectDimensionRecords(root) {
     return records;
 }
 
+// В прозрачном и каркасном режимах размеры рисуются насквозь: у линий
+// отключается проверка глубины, чтобы спрятанные в теле размеры были видны.
+// В «Гранях в цвете» линии подчиняются глубине: открыл фасад — размер появился.
+function applyDimensionLineDepth() {
+    const depthTest = state.displayMode === DISPLAY_MODE_DEFAULT;
+    if (!state.dimensionsGroup) {
+        return;
+    }
+    state.dimensionsGroup.traverse(object => {
+        if (object.material) {
+            object.material.depthTest = depthTest;
+        }
+    });
+}
+
 function formatDimensionValue(record, edgeLength) {
     const value = Number(record.value);
     if (Number.isFinite(value) && value > 0) {
@@ -4104,6 +4120,7 @@ function buildDimensionVisuals(root) {
     group.visible = false;
     state.dimensionsGroup = group;
     state.scene.add(group);
+    applyDimensionLineDepth();
     if (elements.dimensionsToggle) {
         elements.dimensionsToggle.hidden = false;
     }
@@ -4152,7 +4169,9 @@ function updateDimensionLabels() {
             continue;
         }
         let occluded = false;
-        if (state.raycaster && state.modelRoot) {
+        // Перекрытие меток телами проверяется только в «Гранях в цвете»:
+        // в прозрачном и каркасном режимах циферки видны даже внутри.
+        if (state.displayMode === DISPLAY_MODE_DEFAULT && state.raycaster && state.modelRoot) {
             const direction = item.position.clone().sub(cameraPosition);
             const distance = direction.length();
             if (distance > 1e-6) {
